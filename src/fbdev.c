@@ -34,6 +34,11 @@
 #endif
 
 #include <string.h>
+#include <sys/mman.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
 
 /* all driver need this */
 #include "xf86.h"
@@ -725,12 +730,13 @@ FBDevScreenInit(SCREEN_INIT_ARGS_DECL)
 	       pScrn->offset.red,pScrn->offset.green,pScrn->offset.blue);
 #endif
 
-	if (NULL == (fPtr->fbmem = fbdevHWMapVidmem(pScrn))) {
-	        xf86DrvMsg(pScrn->scrnIndex,X_ERROR,"mapping of video memory"
-			   " failed\n");
+	int mem_fd = open("/dev/mem", O_RDWR);
+	xf86DrvMsg(pScrn->scrnIndex, X_INFO, "mmaping %i Bytes (w: %i, h: %i, Bpp: %i)\n", pScrn->virtualX*pScrn->virtualY*pScrn->bitsPerPixel/8, pScrn->virtualY, pScrn->virtualX, pScrn->bitsPerPixel/8);
+	if (NULL == (fPtr->fbmem = mmap(0, pScrn->virtualX*pScrn->virtualY*pScrn->bitsPerPixel/8, PROT_READ | PROT_WRITE, MAP_SHARED, mem_fd, (off_t) 0x08000000))) {
+		xf86DrvMsg(pScrn->scrnIndex,X_ERROR,"mapping of video memory failed\n");
 		return FALSE;
 	}
-	fPtr->fboff = fbdevHWLinearOffset(pScrn);
+	fPtr->fboff = 0;//fbdevHWLinearOffset(pScrn);
 
 	fbdevHWSave(pScrn);
 
