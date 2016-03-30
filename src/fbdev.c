@@ -36,8 +36,14 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+
+/* BAIKAL: Headers needed for signal handling */
+#include <signal.h>
+#include <time.h>
+#include <sys/time.h>
 
 
 /* all driver need this */
@@ -75,12 +81,17 @@
 #include "fbdevhw.h"
 
 #include "xf86xv.h"
-
+#include <xorg/shadowfb.h>
 #include "compat-api.h"
 
 #ifdef XSERVER_LIBPCIACCESS
 #include <pciaccess.h>
 #endif
+
+/* BAIKAL: Headers needed for Baikal PCIe DMA support */
+#include <sys/ioctl.h>
+//#include "sm750_dma.h"
+#include "sm750_ioctl.h"
 
 static Bool debug = 0;
 
@@ -113,6 +124,12 @@ static Bool	FBDevDriverFunc(ScrnInfoPtr pScrn, xorgDriverFuncOp op,
 
 
 enum { FBDEV_ROTATE_NONE=0, FBDEV_ROTATE_CW=270, FBDEV_ROTATE_UD=180, FBDEV_ROTATE_CCW=90 };
+
+/* BAIKAL: Set the kernel-reserved contiguous physical memory address
+ * for shadow framebuffer */
+#define RESERVED_MEM_ADDR 0x06000000
+/* Just for convenience */
+#define MB (1024*1024)
 
 
 /* -------------------------------------------------------------------- */
@@ -171,6 +188,7 @@ typedef enum {
 	OPTION_DEBUG,
 	OPTION_HW_CURSOR,
 	OPTION_SW_CURSOR,
+	OPTION_SMOOTH,		// BAIKAL: For smoother DMA with extra copy
 	OPTION_DRI2,
 	OPTION_DRI2_OVERLAY,
 	OPTION_SWAPBUFFERS_WAIT,
@@ -187,6 +205,7 @@ static const OptionInfoRec FBDevOptions[] = {
 	{ OPTION_DEBUG,		"debug",	OPTV_BOOLEAN,	{0},	FALSE },
 	{ OPTION_HW_CURSOR,	"HWCursor",	OPTV_BOOLEAN,	{0},	FALSE },
 	{ OPTION_SW_CURSOR,	"SWCursor",	OPTV_BOOLEAN,	{0},	FALSE },
+	{ OPTION_SMOOTH,	"Smooth",	OPTV_BOOLEAN,	{0},	FALSE },
 	{ OPTION_DRI2,		"DRI2",		OPTV_BOOLEAN,	{0},	FALSE },
 	{ OPTION_DRI2_OVERLAY,	"DRI2HWOverlay",OPTV_BOOLEAN,	{0},	FALSE },
 	{ OPTION_SWAPBUFFERS_WAIT,"SwapbuffersWait",OPTV_BOOLEAN,{0},	FALSE },
@@ -291,7 +310,7 @@ static Bool FBDevPciProbe(DriverPtr drv, int entity_num,
 	GDevPtr devSection = xf86GetDevFromEntity(pScrn->entityList[0],
 						  pScrn->entityInstanceList[0]);
 
-	device = xf86FindOptionValue(devSection->options, "fbdev");
+	device = (char*)xf86FindOptionValue(devSection->options, "fbdev");
 	if (fbdevHWProbe(NULL, device, NULL)) {
 	    pScrn->driverVersion = FBDEV_VERSION;
 	    pScrn->driverName    = FBDEV_DRIVER_NAME;
@@ -350,7 +369,7 @@ FBDevProbe(DriverPtr drv, int flags)
 	    Bool isIsa = FALSE;
 	    Bool isPci = FALSE;
 
-	    dev = xf86FindOptionValue(devSections[i]->options,"fbdev");
+	    dev = (char*)xf86FindOptionValue(devSections[i]->options,"fbdev");
 	    if (devSections[i]->busID) {
 #ifndef XSERVER_LIBPCIACCESS
 	        if (xf86ParsePciBusString(devSections[i]->busID,&bus,&device,
@@ -469,7 +488,7 @@ FBDevPreInit(ScrnInfoPtr pScrn, int flags)
 	}
 #endif
 	/* open device */
-	if (!fbdevHWInit(pScrn,NULL,xf86FindOptionValue(fPtr->pEnt->device->options,"fbdev")))
+	if (!fbdevHWInit(pScrn,NULL,(char*)xf86FindOptionValue(fPtr->pEnt->device->options,"fbdev")))
 		return FALSE;
 	default_depth = fbdevHWGetDepth(pScrn,&fbbpp);
 	if (!xf86SetDepthBpp(pScrn, default_depth, default_depth, fbbpp,
@@ -661,6 +680,9 @@ FBDevPreInit(ScrnInfoPtr pScrn, int flags)
 	return TRUE;
 }
 
+/* BAIKAL: Forward declaration of shadow framebuffer update routine */
+void
+shadowUpdatePackedDMA(ScreenPtr pScreen, shadowBufPtr pBuf);
 
 static Bool
 FBDevCreateScreenResources(ScreenPtr pScreen)
@@ -679,8 +701,9 @@ FBDevCreateScreenResources(ScreenPtr pScreen)
 
     pPixmap = pScreen->GetScreenPixmap(pScreen);
 
+/* BAIKAL: Shadow framebuffer update routine changed to DMA-based */
     if (!shadowAdd(pScreen, pPixmap, fPtr->rotate ?
-		   shadowUpdateRotatePackedWeak() : shadowUpdatePackedWeak(),
+		   shadowUpdateRotatePackedWeak() : shadowUpdatePackedDMA,
 		   FBDevWindowLinear, fPtr->rotate, NULL)) {
 	return FALSE;
     }
@@ -704,6 +727,10 @@ FBDevShadowInit(ScreenPtr pScreen)
     return TRUE;
 }
 
+/* BAIKAL: Some forward declarations */
+static void timer_handler (int sig);
+int fb_fd;
+Bool smooth = FALSE;
 
 static Bool
 FBDevScreenInit(SCREEN_INIT_ARGS_DECL)
@@ -730,12 +757,26 @@ FBDevScreenInit(SCREEN_INIT_ARGS_DECL)
 	       pScrn->offset.red,pScrn->offset.green,pScrn->offset.blue);
 #endif
 
+	fb_fd = open("/dev/fb0", O_RDWR);
+	/* BAIKAL: Use /dev/mem to allocate a device framebuffer in order to
+	 * benefit from 'Uncached Accelerated' memory attribute */
 	int mem_fd = open("/dev/mem", O_RDWR);
 	xf86DrvMsg(pScrn->scrnIndex, X_INFO, "mmaping %i Bytes (w: %i, h: %i, Bpp: %i)\n", pScrn->virtualX*pScrn->virtualY*pScrn->bitsPerPixel/8, pScrn->virtualY, pScrn->virtualX, pScrn->bitsPerPixel/8);
-	if (NULL == (fPtr->fbmem = mmap(0, pScrn->virtualX*pScrn->virtualY*pScrn->bitsPerPixel/8, PROT_READ | PROT_WRITE, MAP_SHARED, mem_fd, (off_t) 0x08000000))) {
+	unsigned screensize = pScrn->virtualX*pScrn->virtualY*pScrn->bitsPerPixel/8;
+	/* BAIKAL: Allocate 16MB region for shadow framebuffer */
+	char* shadow_mem = mmap(0, 16 * MB, PROT_READ | PROT_WRITE,
+		       		MAP_SHARED, mem_fd, (off_t)RESERVED_MEM_ADDR);
+	if (shadow_mem == MAP_FAILED) {
+		fprintf(stderr, "Unable to allocate ShadowFB\n");
+		exit(-1);
+	}
+	if (MAP_FAILED == (fPtr->fbmem = mmap(0, pScrn->virtualX*pScrn->virtualY*pScrn->bitsPerPixel/8, PROT_READ | PROT_WRITE, MAP_SHARED, mem_fd, (off_t)0x08000000)))
+	{ 
 		xf86DrvMsg(pScrn->scrnIndex,X_ERROR,"mapping of video memory failed\n");
 		return FALSE;
 	}
+
+
 	fPtr->fboff = 0;//fbdevHWLinearOffset(pScrn);
 
 	fbdevHWSave(pScrn);
@@ -797,8 +838,14 @@ FBDevScreenInit(SCREEN_INIT_ARGS_DECL)
 	fPtr->fbstart = fPtr->fbmem + fPtr->fboff;
 
 	if (fPtr->shadowFB) {
+	    /* BAIKAL: Don't allocate a shadow framebuffer dinamically,
+	     * use kernel-reserved memory area instead */
+#if 1
+	    fPtr->shadow = shadow_mem;
+#else
 	    fPtr->shadow = calloc(1, pScrn->virtualX * pScrn->virtualY *
 				  pScrn->bitsPerPixel);
+#endif
 
 	    if (!fPtr->shadow) {
 		xf86DrvMsg(pScrn->scrnIndex, X_ERROR,
@@ -890,6 +937,9 @@ FBDevScreenInit(SCREEN_INIT_ARGS_DECL)
 	 */
 	useBackingStore = xf86ReturnOptValBool(fPtr->Options, OPTION_USE_BS,
 	                                       !fPtr->shadowFB);
+	/* BAIKAL: Check for smooth rendering option */
+	smooth = xf86ReturnOptValBool(fPtr->Options, OPTION_SMOOTH,
+                                               smooth);
 #ifndef __arm__
 	/*
 	 * right now we can only make "smart" decisions on ARM hardware,
@@ -927,7 +977,7 @@ FBDevScreenInit(SCREEN_INIT_ARGS_DECL)
 	                                fPtr->fbmem);
 	}
 
-	if (!(accelmethod = xf86GetOptValString(fPtr->Options, OPTION_ACCELMETHOD)) ||
+	if (!(accelmethod = (char*)xf86GetOptValString(fPtr->Options, OPTION_ACCELMETHOD)) ||
 						strcasecmp(accelmethod, "g2d") == 0) {
 		sunxi_disp_t *disp = fPtr->sunxi_disp_private;
 		if (disp && disp->fd_g2d >= 0 &&
@@ -948,7 +998,7 @@ FBDevScreenInit(SCREEN_INIT_ARGS_DECL)
 	}
 
 	if (!fPtr->SunxiG2D_private && fPtr->fb_copyarea_private) {
-		if (!(accelmethod = xf86GetOptValString(fPtr->Options, OPTION_ACCELMETHOD)) ||
+		if (!(accelmethod = (char*)xf86GetOptValString(fPtr->Options, OPTION_ACCELMETHOD)) ||
 						strcasecmp(accelmethod, "copyarea") == 0) {
 			fb_copyarea_t *fb = fPtr->fb_copyarea_private;
 			if ((fPtr->SunxiG2D_private = SunxiG2D_Init(pScreen, &fb->blt2d))) {
@@ -1108,8 +1158,29 @@ FBDevScreenInit(SCREEN_INIT_ARGS_DECL)
 	           "if this is wrong and needs to be fixed, please check ./configure log\n");
 #endif
 
-	TRACE_EXIT("FBDevScreenInit");
+	/* BAIKAL: Setup signal handler for timer interrupts */
+	{
+		struct sigaction sa;
+		struct itimerspec tv;
+		struct sigevent sev;
+		timer_t timerid;
+		sa.sa_handler = timer_handler;
+		sigemptyset(&sa.sa_mask);
+		sa.sa_flags = 0;
+		sigaction(SIGRTMIN, &sa, NULL);
+		sev.sigev_notify = SIGEV_SIGNAL;
+		sev.sigev_signo = SIGRTMIN;
+		sev.sigev_value.sival_ptr = &timerid;
+		timer_create(CLOCK_REALTIME, &sev, &timerid);
+		tv.it_interval.tv_sec = 0;
+		tv.it_interval.tv_nsec = 10000*1000;
+		tv.it_value.tv_sec = 0;
+		tv.it_value.tv_nsec = 10000*1000;
+		timer_settime(timerid, TIMER_ABSTIME, &tv, NULL);
+		
+	}
 
+	TRACE_EXIT("FBDevScreenInit");
 	return TRUE;
 }
 
@@ -1145,7 +1216,12 @@ FBDevCloseScreen(CLOSE_SCREEN_ARGS_DECL)
 	fbdevHWUnmapVidmem(pScrn);
 	if (fPtr->shadow) {
 	    shadowRemove(pScreen, pScreen->GetScreenPixmap(pScreen));
+	    /* BAIKAL: Unmap shadow framebuffer */
+#if 1
+	    munmap(fPtr->shadow,pScrn->virtualX*pScrn->virtualY*pScrn->bitsPerPixel/8);
+#else
 	    free(fPtr->shadow);
+#endif
 	    fPtr->shadow = NULL;
 	}
 
@@ -1409,3 +1485,176 @@ FBDevDriverFunc(ScrnInfoPtr pScrn, xorgDriverFuncOp op, pointer ptr)
 	    return FALSE;
     }
 }
+
+/* BAIKAL: Here DMA-specific staff begins */
+
+/* Shadow framebuffer update in progress flag */
+static int update_flag = 1;
+/* DMA from signal handler needed flag */
+static int signal_flag = 0;
+/* Start and end of DMA region to be copied to device framebuffer */
+static unsigned char *start=(unsigned char*)0xFFFFFFFF, *end=NULL;
+/* Base address of shadow framebuffer area */
+static FbBits *shaBase;
+
+/* Check the current DMA status */
+static int checkDMA ()
+{
+  int status;
+  ioctl(fb_fd, FBIO_DW_GET_STAT_DMA_TRANSFER, &status);
+  return status;
+}
+
+/* Initialize DMA transfer */
+static void startDMA ()
+{
+  fb_dma_req_t req;
+  int status;
+  /* Should never happen, just a sanity check */
+  if (start == (unsigned char*)0xFFFFFFFF || end == NULL) return;
+  /* If we want smooth rendering, use a copy of shadow framebuffer area */
+  if (smooth) req.from = start + 8 * MB;
+  else req.from = start;
+  /* Setup offset in a device framebuffer */
+  req.fb_off = start - (unsigned char*)shaBase;
+  req.size = end - start;
+#if 0
+  fprintf(stderr, "DMA: from=%p, end=%p, fb_off=%llu, size=%u\n",
+	  start, end, req.fb_off, end - start);
+#endif
+  /* Yet another paranoic sanity check to avoid overwriting low memory */
+  if (req.fb_off + req.size > 16 * MB) {
+    fprintf(stderr, "DMA out of range\n"); exit(-1);
+  }
+  status = ioctl(fb_fd, FBIO_DW_DMA_WRITE, &req);
+  /* Reset margins of DMA region */
+  start = (unsigned char*)0xFFFFFFFF; end = NULL; 
+}
+
+/* Timer interrupt signal handler */
+
+static void
+timer_handler(int sig)
+{
+  /* Shadow framebuffer is not valid or being updated, don't use DMA
+   * from signal handler */
+  if (update_flag) return;
+  /* If DMA needed */
+  if (signal_flag) {
+    /* Try to start DMA */
+    if (checkDMA() != DW_PCI_DMA_RUNNING) {
+      /* If we want smooth rendering, make a copy of data first */
+      if (smooth) memcpy(start + 8 * MB, start, end - start);
+      startDMA();
+      /* On success reset the flag */
+      signal_flag = 0;
+    }
+  }
+}
+
+/* This function was obtained from original shadowUpdatePacked() routine */
+void
+shadowUpdatePackedDMA(ScreenPtr pScreen, shadowBufPtr pBuf)
+{
+    RegionPtr damage = shadowDamage(pBuf);
+    PixmapPtr pShadow = pBuf->pPixmap;
+    int nbox = RegionNumRects(damage);
+    BoxPtr pbox = RegionRects(damage);
+    FbBits *shaLine, *sha;
+    FbStride shaStride;
+    int scrBase, scrLine, scr;
+    int shaBpp;
+    _X_UNUSED int shaXoff, shaYoff;
+    int x, y, w, h, width;
+    int i;
+    FbBits *winBase = NULL, *win;
+    CARD32 winSize;
+    char* p;
+
+    unsigned char *src, *dst;
+    ScrnInfoPtr pScrn = xf86ScreenToScrn(pScreen);
+    FBDevPtr fPtr = FBDEVPTR(pScrn);
+
+    int status;
+
+    /* BAIKAL: Shadow framebuffer update in progress, don't use DMA from
+     * signal handler */    
+    update_flag = 1;
+    fbGetDrawable(&pShadow->drawable, shaBase, shaStride, shaBpp, shaXoff,
+                  shaYoff);
+    while (nbox--) {
+        x = pbox->x1 * shaBpp;
+        y = pbox->y1;
+        w = (pbox->x2 - pbox->x1) * shaBpp;
+        h = pbox->y2 - pbox->y1;
+
+        scrLine = (x >> FB_SHIFT);
+        shaLine = shaBase + y * shaStride + (x >> FB_SHIFT);
+
+        x &= FB_MASK;
+        w = (w + x + FB_MASK) >> FB_SHIFT;
+
+        while (h--) {
+            winSize = 0;
+            scrBase = 0;
+            width = w;
+            scr = scrLine;
+            sha = shaLine;
+            while (width) {
+                /* how much remains in this window */
+                i = scrBase + winSize - scr;
+                if (i <= 0 || scr < scrBase) {
+                    winBase = (FbBits *) (*pBuf->window) (pScreen,
+                                                          y,
+                                                          scr * sizeof(FbBits),
+                                                          SHADOW_WINDOW_WRITE,
+                                                          &winSize,
+                                                          pBuf->closure);
+                    if (!winBase)
+                        return;
+                    scrBase = scr;
+                    winSize /= sizeof(FbBits);
+                    i = winSize;
+                }
+                win = winBase + (scr - scrBase);
+                if (i > width)
+                    i = width;
+                width -= i;
+                scr += i;
+		/* BAIKAL: Update start and end of modified shadow framebuffer
+		 * region for further DMA, don't copy to device framebuffer
+		 * directly*/
+#if 1
+		if (sha < (FbBits*)start) start = (unsigned char*)sha;
+		if (sha + i > (FbBits*)end) end = (unsigned char*)(sha + i);
+#else
+		memcpy(win, sha, i * sizeof(FbBits));
+#endif
+		
+                sha += i;
+            }
+
+            shaLine += shaStride;
+            y++;
+        }
+
+
+        pbox++;
+    }
+
+    /* BAIKAL: Try to start DMA */
+    if (checkDMA() != DW_PCI_DMA_RUNNING) {
+        /* If we want smooth rendering, make a copy of data first */
+        if (smooth) memcpy(start + 8 * MB, start, end - start);
+        startDMA();
+	/* Reset the flag */
+        signal_flag = 0;
+    } else {
+	/* If we still have previous DMA running, let the signal handler do
+	 * DMA in the future */
+        signal_flag = 1;
+    }
+    /* BAIKAL: Shadow framebuffer update completed */
+    update_flag = 0;
+}
+
