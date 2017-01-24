@@ -127,7 +127,9 @@ enum { FBDEV_ROTATE_NONE=0, FBDEV_ROTATE_CW=270, FBDEV_ROTATE_UD=180, FBDEV_ROTA
 
 /* BAIKAL: Set the kernel-reserved contiguous physical memory address
  * for shadow framebuffer */
-#define RESERVED_MEM_ADDR 0x07000000
+
+#define RESERVED_MEM_ADDR_SHORT 0x07000000
+#define RESERVED_MEM_ADDR 0x06000000
 /* Just for convenience */
 #define MB (1024*1024)
 
@@ -196,6 +198,8 @@ typedef enum {
 	OPTION_USE_BS,
 	OPTION_FORCE_BS,
 	OPTION_XV_OVERLAY,
+  OPTION_USE_DMA,
+  OPTION_SHORT_BUFFER
 } FBDevOpts;
 
 static const OptionInfoRec FBDevOptions[] = {
@@ -213,6 +217,8 @@ static const OptionInfoRec FBDevOptions[] = {
 	{ OPTION_USE_BS,	"UseBackingStore",OPTV_BOOLEAN,	{0},	FALSE },
 	{ OPTION_FORCE_BS,	"ForceBackingStore",OPTV_BOOLEAN,{0},	FALSE },
 	{ OPTION_XV_OVERLAY,	"XVHWOverlay",	OPTV_BOOLEAN,	{0},	FALSE },
+  { OPTION_USE_DMA,	"UseDMA",	OPTV_BOOLEAN,	{0},	FALSE },
+  { OPTION_SHORT_BUFFER,	"ShortBuffer",	OPTV_BOOLEAN,	{0},	FALSE },
 	{ -1,			NULL,		OPTV_NONE,	{0},	FALSE }
 };
 
@@ -701,11 +707,19 @@ FBDevCreateScreenResources(ScreenPtr pScreen)
 
     pPixmap = pScreen->GetScreenPixmap(pScreen);
 
+    if (xf86ReturnOptValBool(fPtr->Options, OPTION_USE_DMA, TRUE)) {
 /* BAIKAL: Shadow framebuffer update routine changed to DMA-based */
-    if (!shadowAdd(pScreen, pPixmap, fPtr->rotate ?
-		   shadowUpdateRotatePackedWeak() : shadowUpdatePackedDMA,
-		   FBDevWindowLinear, fPtr->rotate, NULL)) {
-	return FALSE;
+      if (!shadowAdd(pScreen, pPixmap, fPtr->rotate ?
+                     shadowUpdateRotatePackedWeak() : shadowUpdatePackedDMA(),
+                     FBDevWindowLinear, fPtr->rotate, NULL)) {
+        return FALSE;
+      }
+    } else {
+      if (!shadowAdd(pScreen, pPixmap, fPtr->rotate ?
+                     shadowUpdateRotatePackedWeak() : shadowUpdatePackedWeak(),
+                     FBDevWindowLinear, fPtr->rotate, NULL)) {
+        return FALSE;
+      }     
     }
 
     return TRUE;
@@ -761,15 +775,23 @@ FBDevScreenInit(SCREEN_INIT_ARGS_DECL)
 	/* BAIKAL: Use /dev/mem to allocate a device framebuffer in order to
 	 * benefit from 'Uncached Accelerated' memory attribute */
 	int mem_fd = open("/dev/mem", O_RDWR);
-	xf86DrvMsg(pScrn->scrnIndex, X_INFO, "mmaping %i Bytes (w: %i, h: %i, Bpp: %i)\n", pScrn->virtualX*pScrn->virtualY*pScrn->bitsPerPixel/8, pScrn->virtualY, pScrn->virtualX, pScrn->bitsPerPixel/8);
-	unsigned screensize = pScrn->virtualX*pScrn->virtualY*pScrn->bitsPerPixel/8;
-	/* BAIKAL: Allocate 16MB region for shadow framebuffer */
-	char* shadow_mem = mmap(0, 16 * MB, PROT_READ | PROT_WRITE,
-		       		MAP_SHARED, mem_fd, (off_t)RESERVED_MEM_ADDR);
-	if (shadow_mem == MAP_FAILED) {
-		fprintf(stderr, "Unable to allocate ShadowFB\n");
-		exit(-1);
-	}
+
+  if (xf86ReturnOptValBool(fPtr->Options, OPTION_USE_DMA, TRUE)) {
+    xf86DrvMsg(pScrn->scrnIndex, X_INFO, "mmaping %i Bytes (w: %i, h: %i, Bpp: %i)\n", pScrn->virtualX*pScrn->virtualY*pScrn->bitsPerPixel/8, pScrn->virtualY, pScrn->virtualX, pScrn->bitsPerPixel/8);
+    unsigned screensize = pScrn->virtualX*pScrn->virtualY*pScrn->bitsPerPixel/8;
+    size_t size = 16*MB;
+    off_t addr = RESERVED_MEM_ADDR
+    if (xf86ReturnOptValBool(fPtr->Options, OPTION_SHORT_BUFFER, TRUE)) {
+      size = 8*MB;
+      addr = SHORT_RESERVED_MEM_ADDR;
+    }
+    char* shadow_mem = mmap(0, size, PROT_READ | PROT_WRITE,
+                            MAP_SHARED, mem_fd, addr);
+    if (shadow_mem == MAP_FAILED) {
+      fprintf(stderr, "Unable to allocate ShadowFB\n");
+      exit(-1);
+    }
+  }
 	if (MAP_FAILED == (fPtr->fbmem = mmap(0, pScrn->virtualX*pScrn->virtualY*pScrn->bitsPerPixel/8, PROT_READ | PROT_WRITE, MAP_SHARED, mem_fd, (off_t)0x08000000)))
 	{ 
 		xf86DrvMsg(pScrn->scrnIndex,X_ERROR,"mapping of video memory failed\n");
@@ -840,15 +862,15 @@ FBDevScreenInit(SCREEN_INIT_ARGS_DECL)
 	if (fPtr->shadowFB) {
 	    /* BAIKAL: Don't allocate a shadow framebuffer dinamically,
 	     * use kernel-reserved memory area instead */
-#if 1
+    if (xf86ReturnOptValBool(fPtr->Options, OPTION_USE_DMA, TRUE)) {
 	    fPtr->shadow = shadow_mem;
-#else
+    } else {
 	    fPtr->shadow = calloc(1, pScrn->virtualX * pScrn->virtualY *
-				  pScrn->bitsPerPixel);
-#endif
+                            pScrn->bitsPerPixel);
+    }
 
 	    if (!fPtr->shadow) {
-		xf86DrvMsg(pScrn->scrnIndex, X_ERROR,
+        xf86DrvMsg(pScrn->scrnIndex, X_ERROR,
 			   "Failed to allocate shadow framebuffer\n");
 		return FALSE;
 	    }
@@ -1159,7 +1181,7 @@ FBDevScreenInit(SCREEN_INIT_ARGS_DECL)
 #endif
 
 	/* BAIKAL: Setup signal handler for timer interrupts */
-	{
+  if (xf86ReturnOptValBool(fPtr->Options, OPTION_USE_DMA, TRUE)) {
 		struct sigaction sa;
 		struct itimerspec tv;
 		struct sigevent sev;
@@ -1177,7 +1199,6 @@ FBDevScreenInit(SCREEN_INIT_ARGS_DECL)
 		tv.it_value.tv_sec = 0;
 		tv.it_value.tv_nsec = 10000*1000;
 		timer_settime(timerid, TIMER_ABSTIME, &tv, NULL);
-		
 	}
 
 	TRACE_EXIT("FBDevScreenInit");
@@ -1217,11 +1238,11 @@ FBDevCloseScreen(CLOSE_SCREEN_ARGS_DECL)
 	if (fPtr->shadow) {
 	    shadowRemove(pScreen, pScreen->GetScreenPixmap(pScreen));
 	    /* BAIKAL: Unmap shadow framebuffer */
-#if 1
-	    munmap(fPtr->shadow,pScrn->virtualX*pScrn->virtualY*pScrn->bitsPerPixel/8);
-#else
-	    free(fPtr->shadow);
-#endif
+      if (xf86ReturnOptValBool(fPtr->Options, OPTION_USE_DMA, TRUE)) {
+        munmap(fPtr->shadow,pScrn->virtualX*pScrn->virtualY*pScrn->bitsPerPixel/8);
+      } else {
+        free(fPtr->shadow);
+      }
 	    fPtr->shadow = NULL;
 	}
 
