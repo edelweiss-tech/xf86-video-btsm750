@@ -218,7 +218,7 @@ static const OptionInfoRec FBDevOptions[] = {
 	{ OPTION_FORCE_BS,	"ForceBackingStore",OPTV_BOOLEAN,{0},	FALSE },
 	{ OPTION_XV_OVERLAY,	"XVHWOverlay",	OPTV_BOOLEAN,	{0},	FALSE },
   { OPTION_USE_DMA,	"UseDMA",	OPTV_BOOLEAN,	{0},	FALSE },
-  { OPTION_SHORT_BUFFER,	"ShortBuffer",	OPTV_BOOLEAN,	{0},	FALSE },
+  { OPTION_SHORT_BUFFER,	"ShortBuffer",	OPTV_BOOLEAN,	{0},	TRUE },
 	{ -1,			NULL,		OPTV_NONE,	{0},	FALSE }
 };
 
@@ -710,7 +710,7 @@ FBDevCreateScreenResources(ScreenPtr pScreen)
     if (xf86ReturnOptValBool(fPtr->Options, OPTION_USE_DMA, TRUE)) {
 /* BAIKAL: Shadow framebuffer update routine changed to DMA-based */
       if (!shadowAdd(pScreen, pPixmap, fPtr->rotate ?
-                     shadowUpdateRotatePackedWeak() : shadowUpdatePackedDMA(),
+                     shadowUpdateRotatePackedWeak() : shadowUpdatePackedDMA,
                      FBDevWindowLinear, fPtr->rotate, NULL)) {
         return FALSE;
       }
@@ -776,16 +776,18 @@ FBDevScreenInit(SCREEN_INIT_ARGS_DECL)
 	 * benefit from 'Uncached Accelerated' memory attribute */
 	int mem_fd = open("/dev/mem", O_RDWR);
 
+	char *shadow_mem = NULL;
+
   if (xf86ReturnOptValBool(fPtr->Options, OPTION_USE_DMA, TRUE)) {
     xf86DrvMsg(pScrn->scrnIndex, X_INFO, "mmaping %i Bytes (w: %i, h: %i, Bpp: %i)\n", pScrn->virtualX*pScrn->virtualY*pScrn->bitsPerPixel/8, pScrn->virtualY, pScrn->virtualX, pScrn->bitsPerPixel/8);
     unsigned screensize = pScrn->virtualX*pScrn->virtualY*pScrn->bitsPerPixel/8;
     size_t size = 16*MB;
-    off_t addr = RESERVED_MEM_ADDR
+    off_t addr = RESERVED_MEM_ADDR;
     if (xf86ReturnOptValBool(fPtr->Options, OPTION_SHORT_BUFFER, TRUE)) {
       size = 8*MB;
-      addr = SHORT_RESERVED_MEM_ADDR;
+      addr = RESERVED_MEM_ADDR_SHORT;
     }
-    char* shadow_mem = mmap(0, size, PROT_READ | PROT_WRITE,
+    shadow_mem = mmap(0, size, PROT_READ | PROT_WRITE,
                             MAP_SHARED, mem_fd, addr);
     if (shadow_mem == MAP_FAILED) {
       fprintf(stderr, "Unable to allocate ShadowFB\n");
