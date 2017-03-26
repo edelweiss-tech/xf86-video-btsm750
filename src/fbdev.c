@@ -66,6 +66,8 @@
 #include "backing_store_tuner.h"
 #include "sunxi_video.h"
 
+#include <xorg/edid.h>
+#include <xorg/xf86DDC.h>
 #ifdef HAVE_LIBUMP
 #include "sunxi_mali_ump_dri2.h"
 #endif
@@ -600,6 +602,29 @@ FBDevPreInit(ScrnInfoPtr pScrn, int flags)
 	/* select video modes */
 
 	xf86DrvMsg(pScrn->scrnIndex, X_INFO, "checking modes against framebuffer device...\n");
+
+	if (strncmp("sm750", fbdevHWGetName(pScrn), 5) == 0) {
+		xf86DrvMsg(pScrn->scrnIndex, X_INFO, "Silicon Motion SM750 detected. Trying DDC\n");
+		char edid[128];
+		pointer sm = xf86LoadDrvSubModule(pScrn->drv, "siliconmotion");
+		if (sm) {
+			extern int32_t SM750_edidReadMonitorUtility(ScrnInfoPtr pScrn, char* edid, size_t size);
+			int32_t r = SM750_edidReadMonitorUtility(pScrn, edid, sizeof(edid));
+			xf86UnloadSubModule(sm);
+			if (r == 0) {
+				xf86MonPtr pMon = xf86InterpretEDID(pScrn->scrnIndex, edid);
+				if (pMon) {
+					xf86SetDDCproperties(pScrn, pMon);
+				} else {
+					xf86DrvMsg(pScrn->scrnIndex, X_WARNING, "Can't interpret EDID. Modelines will be unavailable\n");
+				}
+			} else {
+				xf86DrvMsg(pScrn->scrnIndex, X_WARNING, "SM750_edidReadMonitorUtility failed. EDID will be unavailable\n");
+			}
+		} else {
+			xf86DrvMsg(pScrn->scrnIndex, X_WARNING, "Can't load siliconmotion driver. EDID will be unavailable\n");
+		}
+	}
 	fbdevHWSetVideoModes(pScrn);
 
 	xf86DrvMsg(pScrn->scrnIndex, X_INFO, "checking modes against monitor...\n");
