@@ -23,7 +23,7 @@
 # -avoid-version prevents gratuitous .0.0.0 version numbers on the end
 # _ladir passes a dummy rpath to libtool so the thing will actually link
 # TODO: -nostdlib/-Bstatic/-lgcc platform magic, not installing the .a, etc.
-AM_CFLAGS = @XORG_CFLAGS@ -mips32r2
+AM_CFLAGS = @XORG_CFLAGS@ -mips32r2 -Wall
 fbturbo_drv_la_LTLIBRARIES = fbturbo_drv.la
 fbturbo_drv_la_LDFLAGS = -module -avoid-version
 fbturbo_drv_ladir = @moduledir@/drivers
@@ -53,7 +53,9 @@ fbturbo_drv_la_SOURCES = \
          sunxi_video.h \
          sunxi_disp_ioctl.h \
          g2d_driver.h \
-         sm750_ioctl.h
+         sm750_ioctl.h \
+				 sm750_output.c \
+				 sm750_output.h
 
 if HAVE_LIBUMP
 fbturbo_drv_la_SOURCES += \

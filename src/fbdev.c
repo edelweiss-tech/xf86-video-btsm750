@@ -49,6 +49,7 @@
 /* all driver need this */
 #include "xf86.h"
 #include "xf86_OSproc.h"
+#include "xf86Crtc.h"
 
 #include "mipointer.h"
 #include "micmap.h"
@@ -94,6 +95,7 @@
 #include <sys/ioctl.h>
 //#include "sm750_dma.h"
 #include "sm750_ioctl.h"
+#include "sm750_output.h"
 
 static Bool debug = 0;
 
@@ -219,9 +221,14 @@ static const OptionInfoRec FBDevOptions[] = {
 	{ OPTION_USE_BS,	"UseBackingStore",OPTV_BOOLEAN,	{0},	FALSE },
 	{ OPTION_FORCE_BS,	"ForceBackingStore",OPTV_BOOLEAN,{0},	FALSE },
 	{ OPTION_XV_OVERLAY,	"XVHWOverlay",	OPTV_BOOLEAN,	{0},	FALSE },
-  { OPTION_USE_DMA,	"UseDMA",	OPTV_BOOLEAN,	{0},	FALSE },
-  { OPTION_SHORT_BUFFER,	"ShortBuffer",	OPTV_BOOLEAN,	{0},	TRUE },
+	{ OPTION_USE_DMA,	"UseDMA",	OPTV_BOOLEAN,	{0},	FALSE },
+	{ OPTION_SHORT_BUFFER,	"ShortBuffer",	OPTV_BOOLEAN,	{0},	TRUE },
 	{ -1,			NULL,		OPTV_NONE,	{0},	FALSE }
+};
+
+char* outputName[]={"PNL","CRT"};
+
+static xf86CrtcConfigFuncsRec DRV_CrtcConfigFuncs = {
 };
 
 /* -------------------------------------------------------------------- */
@@ -476,6 +483,28 @@ FBDevPreInit(ScrnInfoPtr pScrn, int flags)
 	if (pScrn->numEntities != 1)
 		return FALSE;
 
+  xf86DrvMsg(pScrn->scrnIndex, X_INFO, "Silicon Motion SM750 detected. Trying DDC\n");
+  char edid[128];
+  pointer sm = xf86LoadDrvSubModule(pScrn->drv, "siliconmotion");
+  if (sm) {
+    extern int32_t SM750_edidReadMonitorUtility(ScrnInfoPtr pScrn, char* edid, size_t size);
+    int32_t r = SM750_edidReadMonitorUtility(pScrn, edid, sizeof(edid));
+    //xf86UnloadSubModule(sm);
+    if (r == 0) {
+      xf86MonPtr pMon = xf86InterpretEDID(pScrn->scrnIndex, edid);
+      if (pMon) {
+        xf86SetDDCproperties(pScrn, xf86PrintEDID(pMon));
+      } else {
+        xf86DrvMsg(pScrn->scrnIndex, X_WARNING, "Can't interpret EDID. Modelines will be unavailable\n");
+      }
+    } else {
+      xf86DrvMsg(pScrn->scrnIndex, X_WARNING, "SM750_edidReadMonitorUtility failed. EDID will be unavailable\n");
+    }
+  } else {
+    xf86DrvMsg(pScrn->scrnIndex, X_WARNING, "Can't load siliconmotion driver. EDID will be unavailable\n");
+  }
+
+
 	pScrn->monitor = pScrn->confScreen->monitor;
 
 	FBDevGetRec(pScrn);
@@ -604,28 +633,80 @@ FBDevPreInit(ScrnInfoPtr pScrn, int flags)
 	xf86DrvMsg(pScrn->scrnIndex, X_INFO, "checking modes against framebuffer device...\n");
 
 	if (strncmp("sm750", fbdevHWGetName(pScrn), 5) == 0) {
-		xf86DrvMsg(pScrn->scrnIndex, X_INFO, "Silicon Motion SM750 detected. Trying DDC\n");
-		char edid[128];
-		pointer sm = xf86LoadDrvSubModule(pScrn->drv, "siliconmotion");
-		if (sm) {
-			extern int32_t SM750_edidReadMonitorUtility(ScrnInfoPtr pScrn, char* edid, size_t size);
-			int32_t r = SM750_edidReadMonitorUtility(pScrn, edid, sizeof(edid));
-			xf86UnloadSubModule(sm);
-			if (r == 0) {
-				xf86MonPtr pMon = xf86InterpretEDID(pScrn->scrnIndex, edid);
-				if (pMon) {
-					xf86SetDDCproperties(pScrn, pMon);
-				} else {
-					xf86DrvMsg(pScrn->scrnIndex, X_WARNING, "Can't interpret EDID. Modelines will be unavailable\n");
-				}
-			} else {
-				xf86DrvMsg(pScrn->scrnIndex, X_WARNING, "SM750_edidReadMonitorUtility failed. EDID will be unavailable\n");
-			}
-		} else {
-			xf86DrvMsg(pScrn->scrnIndex, X_WARNING, "Can't load siliconmotion driver. EDID will be unavailable\n");
-		}
 	}
-	fbdevHWSetVideoModes(pScrn);
+	//fbdevHWSetVideoModes(pScrn);
+
+	pScrn->virtualX = pScrn->display->virtualX;
+  
+  if(xf86LoadSubModule(pScrn, "ddc")){
+		//xf86LoaderReqSymLists(ddcSymbols, NULL);            
+	}
+
+  xf86DrvMsg(pScrn->scrnIndex, X_INFO, "Fill outputFuncs\n");
+  xf86OutputPtr		output;
+  xf86OutputFuncsPtr	outputFuncs = xnfcalloc(sizeof(xf86OutputFuncsRec), 1);
+
+  outputFuncs->create_resources = DRV_OutputCreateResources;
+  outputFuncs->mode_fixup = DRV_OutputModeFixup;
+  outputFuncs->prepare = DRV_OutputPrepare;
+  outputFuncs->commit = DRV_OutputCommit;
+  outputFuncs->destroy = DRV_OutputDestroy;
+  outputFuncs->get_modes 	= DRV_OutputGetModes;
+  outputFuncs->detect		= DRV_OutputDetect_PNL_CRT;
+
+  xf86DrvMsg(pScrn->scrnIndex, X_INFO, "Init CRTC\n");
+  xf86CrtcConfigInit(pScrn,&DRV_CrtcConfigFuncs);
+  if(pScrn->display->virtualX<128) {
+		xf86CrtcSetSizeRange(pScrn,128,128,4096,4096);
+  } else {
+		xf86CrtcSetSizeRange(pScrn,128,128,pScrn->display->virtualX,
+                         pScrn->display->virtualY);
+  }
+  
+  xf86DrvMsg(pScrn->scrnIndex, X_INFO, "Create output\n");
+  if (! (output = xf86OutputCreate(pScrn, outputFuncs, outputName[0]))) {
+    xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "Failed to create output\n");
+    return FALSE;
+  }
+  output->possible_crtcs = 1;
+  output->possible_clones = 0;
+  output->interlaceAllowed = FALSE;
+  output->doubleScanAllowed = FALSE;
+  XINF("output[%d]->possible_crtcs = %d \n", 0, output->possible_crtcs);
+
+  xf86InitialConfiguration (pScrn, 0);
+
+  XINF("CheckModeSize: %i\n", DRV_CheckModeSize(pScrn, 4096, 800, 600));
+  
+  {
+    ClockRange r;
+    r.next=NULL;
+    r.minClock = 12000;
+    r.maxClock = 270000;
+    r.clockIndex = -1;
+    r.interlaceAllowed = FALSE;
+    r.doubleScanAllowed = FALSE;
+    int i = xf86ValidateModes(pScrn,
+                              pScrn->monitor->Modes,/* Available monitor modes  */
+                              pScrn->display->modes,/* req mode names for screen */
+                              &r,
+                              NULL,
+                              128,
+                              4096,
+                              128,
+                              128,
+                              4096,
+                              pScrn->display->virtualX,
+                              pScrn->display->virtualY,
+                              pScrn->videoRam,
+                              LOOKUP_BEST_REFRESH);
+    /*The function's return value is the number of matching modes found, or -1
+      if an unrecoverable error was encountered.*/
+    if(i == -1) {
+      XINF("Failed to validate modes\n");
+      return FALSE;
+    }
+  }
 
 	xf86DrvMsg(pScrn->scrnIndex, X_INFO, "checking modes against monitor...\n");
 	{
@@ -645,6 +726,8 @@ FBDevPreInit(ScrnInfoPtr pScrn, int flags)
 
 	/* First approximation, may be refined in ScreenInit */
 	pScrn->displayWidth = pScrn->virtualX;
+
+	xf86SetCrtcForModes(pScrn, 0);
 
 	xf86PrintModes(pScrn);
 
