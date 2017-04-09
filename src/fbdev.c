@@ -100,11 +100,11 @@
 static Bool debug = 0;
 
 #define TRACE_ENTER(str) \
-    do { if (debug) ErrorF("fbturbo: " str " %d\n",pScrn->scrnIndex); } while (0)
+    do { if (debug) ErrorF("btsm750: " str " %d\n",pScrn->scrnIndex); } while (0)
 #define TRACE_EXIT(str) \
-    do { if (debug) ErrorF("fbturbo: " str " done\n"); } while (0)
+    do { if (debug) ErrorF("btsm750: " str " done\n"); } while (0)
 #define TRACE(str) \
-    do { if (debug) ErrorF("fbturbo trace: " str "\n"); } while (0)
+    do { if (debug) ErrorF("btsm750 trace: " str "\n"); } while (0)
 
 /* -------------------------------------------------------------------- */
 /* prototypes                                                           */
@@ -147,8 +147,8 @@ enum { FBDEV_ROTATE_NONE=0, FBDEV_ROTATE_CW=270, FBDEV_ROTATE_UD=180, FBDEV_ROTA
 static int pix24bpp = 0;
 
 #define FBDEV_VERSION		4000
-#define FBDEV_NAME		"FBTURBO"
-#define FBDEV_DRIVER_NAME	"fbturbo"
+#define FBDEV_NAME		"btsm750"
+#define FBDEV_DRIVER_NAME	"btsm750"
 
 #ifdef XSERVER_LIBPCIACCESS
 static const struct pci_id_match fbdev_device_match[] = {
@@ -182,7 +182,7 @@ _X_EXPORT DriverRec FBDEV = {
 
 /* Supported "chipsets" */
 static SymTabRec FBDevChipsets[] = {
-    { 0, "fbturbo" },
+    { 0, "SM750" },
     {-1, NULL }
 };
 
@@ -239,7 +239,7 @@ MODULESETUPPROTO(FBDevSetup);
 
 static XF86ModuleVersionInfo FBDevVersRec =
 {
-	"fbturbo",
+	"btsm750",
 	MODULEVENDORSTRING,
 	MODINFOSTRING1,
 	MODINFOSTRING2,
@@ -251,7 +251,7 @@ static XF86ModuleVersionInfo FBDevVersRec =
 	{0,0,0,0}
 };
 
-_X_EXPORT XF86ModuleData fbturboModuleData = { &FBDevVersRec, FBDevSetup, NULL };
+_X_EXPORT XF86ModuleData btsm750ModuleData = { &FBDevVersRec, FBDevSetup, NULL };
 
 pointer
 FBDevSetup(pointer module, pointer opts, int *errmaj, int *errmin)
@@ -483,6 +483,7 @@ FBDevPreInit(ScrnInfoPtr pScrn, int flags)
 	if (pScrn->numEntities != 1)
 		return FALSE;
 
+#ifdef IMPLEMENT_RANDR_OUTPUTS
   xf86DrvMsg(pScrn->scrnIndex, X_INFO, "Silicon Motion SM750 detected. Trying DDC\n");
   char edid[128];
   pointer sm = xf86LoadDrvSubModule(pScrn->drv, "siliconmotion");
@@ -503,7 +504,7 @@ FBDevPreInit(ScrnInfoPtr pScrn, int flags)
   } else {
     xf86DrvMsg(pScrn->scrnIndex, X_WARNING, "Can't load siliconmotion driver. EDID will be unavailable\n");
   }
-
+#endif
 
 	pScrn->monitor = pScrn->confScreen->monitor;
 
@@ -566,7 +567,7 @@ FBDevPreInit(ScrnInfoPtr pScrn, int flags)
 
 	pScrn->progClock = TRUE;
 	pScrn->rgbBits   = 8;
-	pScrn->chipset   = "fbturbo";
+	pScrn->chipset   = "SM750";
 	pScrn->videoRam  = fbdevHWGetVidmem(pScrn);
 
 	xf86DrvMsg(pScrn->scrnIndex, X_INFO, "hardware: %s (video memory:"

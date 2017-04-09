@@ -23,7 +23,7 @@
 # Initialize Autoconf
 AC_PREREQ([2.60])
 AC_INIT([xf86-video-fbturbo],
-        [0.5.1],
+        [1],
         [https://github.com/snegovick/xf86-video-btsm750],
         [xf86-video-btsm750])
 AC_CONFIG_SRCDIR([Makefile.am])
@@ -31,7 +31,7 @@ AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_AUX_DIR(.)
 
 # Initialize Automake
-AM_INIT_AUTOMAKE([foreign dist-bzip2])
+AM_INIT_AUTOMAKE([foreign dist-bzip2 dist-xz subdir-objects])
 AM_MAINTAINER_MODE
 
 # Require X.Org macros 1.8 or later for MAN_SUBSTS set by XORG_MANPAGE_SECTIONS
@@ -42,6 +42,19 @@ XORG_DEFAULT_OPTIONS
 
 # Needed to compile assembly sources
 AM_PROG_AS
+AC_PROG_INSTALL                   # Install
+AC_PROG_SED                       # Sed
+AC_PROG_MKDIR_P                   # mkdir -p
+AM_PROG_AR                        # ar
+AC_PATH_PROG([PERL], [perl])      # Perl
+AC_PATH_PROG([TAR], [tar gtar])   # tar
+AC_PATH_PROG([XARGS], [xargs])    # xargs
+AC_PATH_PROG([CHMOD], [chmod])    # chmod
+AC_PATH_PROG([CAT], [cat])        # cat
+AC_PATH_PROG([ECHO], [echo])      # echo
+AC_PATH_PROG([CP], [cp])          # cp
+AC_PATH_PROG([DATE], [date])      # date
+AC_PATH_PROG([MV], [mv])          # mv
 
 # Initialize libtool
 AC_DISABLE_STATIC
@@ -81,6 +94,36 @@ if test "x$PCIACCESS" = xyes; then
     PKG_CHECK_MODULES([PCIACCESS], [pciaccess >= 0.8.0])
     XORG_CFLAGS="$XORG_CFLAGS $PCIACCESS_CFLAGS"
 fi
+
+# Test is required for these option checks
+AC_PATH_PROG([TEST], [test])
+AC_PATH_PROG([DEBUILD], [dpkg-buildpackage], [notfound])
+
+# --enable-rpm copies the ni executable and the spec file to the dist package,
+# for use in building RPM packages. Requires rpm and rpmbuild.
+AC_ARG_ENABLE([rpm],
+	[AS_HELP_STRING([--enable-rpm=@<:@yes/no@:>@],
+		[Configure for building RPM package @<:@default=no@:>@ (requires rpm and rpmbuild)])],
+	[AS_IF([$TEST "x$enable_rpm" = xyes],
+		[AS_IF([$TEST "x$RPMBUILD" = xnotfound],
+			[AC_MSG_ERROR([rpmbuild is required for --enable-rpm])],
+		[$TEST "x$RPM" = xnotfound],
+			[AC_MSG_ERROR([rpm is required for --enable-rpm])])])],
+	[enable_rpm=no])
+AM_CONDITIONAL(BUILDING_RPM, $TEST "x$enable_rpm" = xyes)
+
+# --enable-deb copies only the ni executable to the dist package, for use in
+# building DEB packages.
+AC_ARG_ENABLE([deb],
+	[AS_HELP_STRING([--enable-deb=@<:@yes/no@:>@],
+		[Configure for building Debian package @<:@default=no@:>@ (requires dpkg-buildpackage)])],
+	[AS_IF([$TEST "x$enable_deb" = xyes],
+		[AS_IF([$TEST "x$DEBUILD" = xnotfound],
+			[AC_MSG_ERROR([dpkg-buildpackage is required for --enable-deb])],
+		[$TEST "x$enable_rpm" = xyes],
+			[AC_MSG_ERROR([--enable-rpm and --enable-deb are mutually exclusive])])])],
+	[enable_deb=no])
+AM_CONDITIONAL([BUILDING_DEB], [$TEST "x$enable_deb" = xyes])
 
 # Checks for libraries.
 

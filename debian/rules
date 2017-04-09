@@ -13,6 +13,6 @@
 	dh $@
 
 override_dh_auto_configure:
-	dh_auto_configure -- --enable-manuals
+	dh_auto_configure -- --prefix=/usr --libdir=/usr/lib
 
 override_dh_auto_test:
