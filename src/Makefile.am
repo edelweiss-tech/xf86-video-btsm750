@@ -24,7 +24,7 @@
 # _ladir passes a dummy rpath to libtool so the thing will actually link
 # TODO: -nostdlib/-Bstatic/-lgcc platform magic, not installing the .a, etc.
 AM_CFLAGS = @XORG_CFLAGS@ -mips32r2 -Wall
-fbturbo_drv_la_LTLIBRARIES = fbturbo_drv.la
+fbturbo_drv_la_LTLIBRARIES = btsm750_drv.la
 fbturbo_drv_la_LDFLAGS = -module -avoid-version
 fbturbo_drv_ladir = @moduledir@/drivers
 

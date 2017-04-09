@@ -632,10 +632,11 @@ FBDevPreInit(ScrnInfoPtr pScrn, int flags)
 
 	xf86DrvMsg(pScrn->scrnIndex, X_INFO, "checking modes against framebuffer device...\n");
 
-	if (strncmp("sm750", fbdevHWGetName(pScrn), 5) == 0) {
-	}
-	//fbdevHWSetVideoModes(pScrn);
+	/* if (strncmp("sm750", fbdevHWGetName(pScrn), 5) == 0) { */
+	/* } */
+  fbdevHWSetVideoModes(pScrn);
 
+#ifdef IMPLEMENT_RANDR_OUTPUTS
 	pScrn->virtualX = pScrn->display->virtualX;
   
   if(xf86LoadSubModule(pScrn, "ddc")){
@@ -707,7 +708,8 @@ FBDevPreInit(ScrnInfoPtr pScrn, int flags)
       return FALSE;
     }
   }
-
+#endif
+  
 	xf86DrvMsg(pScrn->scrnIndex, X_INFO, "checking modes against monitor...\n");
 	{
 		DisplayModePtr mode, first = mode = pScrn->modes;
