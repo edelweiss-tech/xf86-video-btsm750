@@ -24,7 +24,7 @@
 AC_PREREQ([2.60])
 AC_INIT([xf86-video-fbturbo],
         [1.2],
-        [https://github.com/snegovick/xf86-video-btsm750],
+        [],
         [xf86-video-btsm750])
 AC_CONFIG_SRCDIR([Makefile.am])
 AC_CONFIG_HEADERS([config.h])
