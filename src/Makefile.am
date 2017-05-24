@@ -28,8 +28,8 @@ btsm750_drv_la_LTLIBRARIES = btsm750_drv.la
 btsm750_drv_la_LDFLAGS = -module -avoid-version
 btsm750_drv_ladir = @moduledir@/drivers
 
-btsm750confdir=$(sysconfdir)/X11/xorg.conf.d
-dist_btsm750conf_DATA = 20-btsm750.conf 30-screen.conf
+#btsm750confdir=$(sysconfdir)/X11/xorg.conf.d
+#dist_btsm750conf_DATA = 20-btsm750.conf 30-screen.conf
 
 btsm750_drv_la_SOURCES = \
          compat-api.h \
