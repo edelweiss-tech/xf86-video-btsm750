@@ -222,7 +222,7 @@ static const OptionInfoRec FBDevOptions[] = {
 	{ OPTION_FORCE_BS,	"ForceBackingStore",OPTV_BOOLEAN,{0},	FALSE },
 	{ OPTION_XV_OVERLAY,	"XVHWOverlay",	OPTV_BOOLEAN,	{0},	FALSE },
 	{ OPTION_USE_DMA,	"UseDMA",	OPTV_BOOLEAN,	{0},	FALSE },
-	{ OPTION_SHORT_BUFFER,	"ShortBuffer",	OPTV_BOOLEAN,	{0},	TRUE },
+	{ OPTION_SHORT_BUFFER,	"ShortBuffer",	OPTV_BOOLEAN,	{0},	FALSE },
 	{ -1,			NULL,		OPTV_NONE,	{0},	FALSE }
 };
 
