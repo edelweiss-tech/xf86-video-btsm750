@@ -133,7 +133,7 @@ enum { FBDEV_ROTATE_NONE=0, FBDEV_ROTATE_CW=270, FBDEV_ROTATE_UD=180, FBDEV_ROTA
  * for shadow framebuffer */
 
 #define RESERVED_MEM_ADDR_SHORT 0x07000000
-#define RESERVED_MEM_ADDR 0x06000000
+#define RESERVED_MEM_ADDR 0x07000000
 /* Just for convenience */
 #define MB (1024*1024)
 
