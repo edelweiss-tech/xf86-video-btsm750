@@ -1,3 +1,14 @@
+xf86-video-btsm750 is a fork of xf86-video-fbturbo with sm750 support for Baikal-T1 CPU.
+
+Build instructions:
+1. $ autogen.sh
+2. $ ./configure --enable-deb --prefix=/usr . --enable-deb turns on deb package building
+3. make
+4. make deb
+
+Original README from fbturbo
+============================
+
 xf86-video-fbturbo - video driver, primarily optimized for the devices powered
 by the Allwinner SoC (A10, A13, A20). It can use some of the 2D/3D hardware
 acceleration features.
