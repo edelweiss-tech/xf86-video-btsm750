@@ -1,3 +1,6 @@
+This driver is only good for kernel 3.19. It also does not support the new Xorg
+ABI, so it will not work on Debian buster. The driver does not support XVIDEO.
+
 xf86-video-btsm750 is a fork of xf86-video-fbturbo with sm750 support for Baikal-T1 CPU.
 
 Build instructions:
